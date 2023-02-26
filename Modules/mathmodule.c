@@ -727,21 +727,29 @@ PyDoc_STRVAR(math_gcd_doc,
 static PyObject *
 long_lcm(PyObject *a, PyObject *b)
 {
-    PyObject *g, *m, *f, *ab;
+    PyObject *g, *m, *f, *ab, *tmp;
 
-    if (Py_SIZE(a) == 0 || Py_SIZE(b) == 0) {
+    // Ensure a is "longer" than b, as that makes b//gcd*a faster.
+    // Also, gcd(a, b) prefers a to be the longer one.
+    // And if math.lcm(*integers) was called with many arguments, then its res and thus a here tends to be(come) larger than b.
+    if (Py_ABS(Py_SIZE(a)) < Py_ABS(Py_SIZE(b)) == 0) {
+        tmp = a;
+        a = b;
+        b = tmp;
+    }
+    if (Py_SIZE(b) == 0) {
         return PyLong_FromLong(0);
     }
     g = _PyLong_GCD(a, b);
     if (g == NULL) {
         return NULL;
     }
-    f = PyNumber_FloorDivide(a, g);
+    f = PyNumber_FloorDivide(b, g);
     Py_DECREF(g);
     if (f == NULL) {
         return NULL;
     }
-    m = PyNumber_Multiply(f, b);
+    m = PyNumber_Multiply(f, a);
     Py_DECREF(f);
     if (m == NULL) {
         return NULL;
