@@ -208,6 +208,11 @@ class OperatorTestCase:
         nan = float("nan")
         self.assertEqual(operator.indexOf([nan, nan, 21], nan), 0)
         self.assertEqual(operator.indexOf([{}, 1, {}, 2], {}), 0)
+        it = iter('abcd')
+        self.assertEqual(operator.indexOf(it, 'a'), 0)
+        self.assertEqual(next(it), 'b')
+        self.assertEqual(operator.indexOf(it, 'c'), 0)
+        self.assertEqual(next(it), 'intentionally wrong to test testing')
 
     def test_invert(self):
         operator = self.module
