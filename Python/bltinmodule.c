@@ -1289,9 +1289,9 @@ map_vectorcall(PyObject *type, PyObject * const*args,
     }
 
     Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
-    if (nargs < 2) {
+    if (nargs < 1) {
         PyErr_SetString(PyExc_TypeError,
-           "map() must have at least two arguments.");
+           "map() must have at least one argument.");
         return NULL;
     }
 
