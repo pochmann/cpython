@@ -2,6 +2,12 @@
 preserve
 [clinic start generated code]*/
 
+#if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+#  include "pycore_gc.h"            // PyGC_Head
+#  include "pycore_runtime.h"       // _Py_ID()
+#endif
+
+
 PyDoc_STRVAR(_lsprof_Profiler_getstats__doc__,
 "getstats($self, /)\n"
 "--\n"
@@ -31,14 +37,18 @@ PyDoc_STRVAR(_lsprof_Profiler_getstats__doc__,
 "    inlinetime    inline time (not in further subcalls)");
 
 #define _LSPROF_PROFILER_GETSTATS_METHODDEF    \
-    {"getstats", (PyCFunction)_lsprof_Profiler_getstats, METH_NOARGS, _lsprof_Profiler_getstats__doc__},
+    {"getstats", _PyCFunction_CAST(_lsprof_Profiler_getstats), METH_METHOD|METH_FASTCALL|METH_KEYWORDS, _lsprof_Profiler_getstats__doc__},
 
 static PyObject *
-_lsprof_Profiler_getstats_impl(ProfilerObject *self);
+_lsprof_Profiler_getstats_impl(ProfilerObject *self, PyTypeObject *cls);
 
 static PyObject *
-_lsprof_Profiler_getstats(ProfilerObject *self, PyObject *Py_UNUSED(ignored))
+_lsprof_Profiler_getstats(ProfilerObject *self, PyTypeObject *cls, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
 {
-    return _lsprof_Profiler_getstats_impl(self);
+    if (nargs) {
+        PyErr_SetString(PyExc_TypeError, "getstats() takes no arguments");
+        return NULL;
+    }
+    return _lsprof_Profiler_getstats_impl(self, cls);
 }
-/*[clinic end generated code: output=24c525812713e00f input=a9049054013a1b77]*/
+/*[clinic end generated code: output=7425d3481349629a input=a9049054013a1b77]*/

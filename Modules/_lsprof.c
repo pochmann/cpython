@@ -1,4 +1,10 @@
+#ifndef Py_BUILD_CORE_BUILTIN
+#  define Py_BUILD_CORE_MODULE 1
+#endif
+
 #include "Python.h"
+#include "pycore_call.h"          // _PyObject_CallNoArgs()
+#include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "rotatingtree.h"
 
 /************************************************************/
@@ -55,18 +61,28 @@ module _lsprof
 class _lsprof.Profiler "ProfilerObject *" "&ProfilerType"
 [clinic start generated code]*/
 /*[clinic end generated code: output=da39a3ee5e6b4b0d input=e349ac952152f336]*/
-static PyTypeObject PyProfiler_Type;
 
 #include "clinic/_lsprof.c.h"
 
-#define PyProfiler_Check(op) PyObject_TypeCheck(op, &PyProfiler_Type)
-#define PyProfiler_CheckExact(op) Py_IS_TYPE(op, &PyProfiler_Type)
+typedef struct {
+    PyTypeObject *profiler_type;
+    PyTypeObject *stats_entry_type;
+    PyTypeObject *stats_subentry_type;
+} _lsprof_state;
+
+static inline _lsprof_state*
+_lsprof_get_state(PyObject *module)
+{
+    void *state = PyModule_GetState(module);
+    assert(state != NULL);
+    return (_lsprof_state *)state;
+}
 
 /*** External Timers ***/
 
 static _PyTime_t CallExternalTimer(ProfilerObject *pObj)
 {
-    PyObject *o = _PyObject_CallNoArg(pObj->externalTimer);
+    PyObject *o = _PyObject_CallNoArgs(pObj->externalTimer);
     if (o == NULL) {
         PyErr_WriteUnraisable(pObj->externalTimer);
         return 0;
@@ -112,8 +128,7 @@ normalizeUserObj(PyObject *obj)
 {
     PyCFunctionObject *fn;
     if (!PyCFunction_Check(obj)) {
-        Py_INCREF(obj);
-        return obj;
+        return Py_NewRef(obj);
     }
     /* Replace built-in function objects with a descriptive string
        because of built-in methods -- keeping a reference to
@@ -126,8 +141,7 @@ normalizeUserObj(PyObject *obj)
         PyObject *modname = NULL;
         if (mod != NULL) {
             if (PyUnicode_Check(mod)) {
-                modname = mod;
-                Py_INCREF(modname);
+                modname = Py_NewRef(mod);
             }
             else if (PyModule_Check(mod)) {
                 modname = PyModule_GetNameObject(mod);
@@ -334,8 +348,7 @@ ptrace_enter_call(PyObject *self, void *key, PyObject *userObj)
      * exception, and some of the code under here assumes that
      * PyErr_* is its own to mess around with, so we have to
      * save and restore any current exception. */
-    PyObject *last_type, *last_value, *last_tb;
-    PyErr_Fetch(&last_type, &last_value, &last_tb);
+    PyObject *exc = PyErr_GetRaisedException();
 
     profEntry = getEntry(pObj, key);
     if (profEntry == NULL) {
@@ -360,7 +373,7 @@ ptrace_enter_call(PyObject *self, void *key, PyObject *userObj)
     initContext(pObj, pContext, profEntry);
 
 restorePyerr:
-    PyErr_Restore(last_type, last_value, last_tb);
+    PyErr_SetRaisedException(exc);
 }
 
 static void
@@ -478,28 +491,24 @@ static PyStructSequence_Field profiler_subentry_fields[] = {
 };
 
 static PyStructSequence_Desc profiler_entry_desc = {
-    "_lsprof.profiler_entry", /* name */
-    NULL, /* doc */
-    profiler_entry_fields,
-    6
+    .name = "_lsprof.profiler_entry",
+    .fields = profiler_entry_fields,
+    .doc = NULL,
+    .n_in_sequence = 6
 };
 
 static PyStructSequence_Desc profiler_subentry_desc = {
-    "_lsprof.profiler_subentry", /* name */
-    NULL, /* doc */
-    profiler_subentry_fields,
-    5
+    .name = "_lsprof.profiler_subentry",
+    .fields = profiler_subentry_fields,
+    .doc = NULL,
+    .n_in_sequence = 5
 };
-
-static int initialized;
-static PyTypeObject StatsEntryType;
-static PyTypeObject StatsSubEntryType;
-
 
 typedef struct {
     PyObject *list;
     PyObject *sublist;
     double factor;
+    _lsprof_state *state;
 } statscollector_t;
 
 static int statsForSubEntry(rotating_node_t *node, void *arg)
@@ -509,7 +518,7 @@ static int statsForSubEntry(rotating_node_t *node, void *arg)
     ProfilerEntry *entry = (ProfilerEntry*) sentry->header.key;
     int err;
     PyObject *sinfo;
-    sinfo = PyObject_CallFunction((PyObject*) &StatsSubEntryType,
+    sinfo = PyObject_CallFunction((PyObject*) collect->state->stats_subentry_type,
                                   "((Olldd))",
                                   entry->userObj,
                                   sentry->callcount,
@@ -543,11 +552,10 @@ static int statsForEntry(rotating_node_t *node, void *arg)
         }
     }
     else {
-        Py_INCREF(Py_None);
-        collect->sublist = Py_None;
+        collect->sublist = Py_NewRef(Py_None);
     }
 
-    info = PyObject_CallFunction((PyObject*) &StatsEntryType,
+    info = PyObject_CallFunction((PyObject*) collect->state->stats_entry_type,
                                  "((OllddO))",
                                  entry->userObj,
                                  entry->callcount,
@@ -565,6 +573,8 @@ static int statsForEntry(rotating_node_t *node, void *arg)
 
 /*[clinic input]
 _lsprof.Profiler.getstats
+
+    cls: defining_class
 
 list of profiler_entry objects.
 
@@ -592,10 +602,11 @@ profiler_subentry objects:
 [clinic start generated code]*/
 
 static PyObject *
-_lsprof_Profiler_getstats_impl(ProfilerObject *self)
-/*[clinic end generated code: output=9461b451e9ef0f24 input=ade04fa384ce450a]*/
+_lsprof_Profiler_getstats_impl(ProfilerObject *self, PyTypeObject *cls)
+/*[clinic end generated code: output=1806ef720019ee03 input=445e193ef4522902]*/
 {
     statscollector_t collect;
+    collect.state = _PyType_GetModuleState(cls);
     if (pending_exception(self)) {
         return NULL;
     }
@@ -655,14 +666,14 @@ profiler_enable(ProfilerObject *self, PyObject *args, PyObject *kwds)
     int subcalls = -1;
     int builtins = -1;
     static char *kwlist[] = {"subcalls", "builtins", 0};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ii:enable",
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|pp:enable",
                                      kwlist, &subcalls, &builtins))
         return NULL;
     if (setSubcalls(self, subcalls) < 0 || setBuiltins(self, builtins) < 0) {
         return NULL;
     }
 
-    PyThreadState *tstate = PyThreadState_GET();
+    PyThreadState *tstate = _PyThreadState_GET();
     if (_PyEval_SetProfile(tstate, profiler_callback, (PyObject*)self) < 0) {
         return NULL;
     }
@@ -696,7 +707,7 @@ Stop collecting profiling information.\n\
 static PyObject*
 profiler_disable(ProfilerObject *self, PyObject* noarg)
 {
-    PyThreadState *tstate = PyThreadState_GET();
+    PyThreadState *tstate = _PyThreadState_GET();
     if (_PyEval_SetProfile(tstate, NULL, NULL) < 0) {
         return NULL;
     }
@@ -722,20 +733,30 @@ profiler_clear(ProfilerObject *pObj, PyObject* noarg)
     Py_RETURN_NONE;
 }
 
+static int
+profiler_traverse(ProfilerObject *op, visitproc visit, void *arg)
+{
+    Py_VISIT(Py_TYPE(op));
+    return 0;
+}
+
 static void
 profiler_dealloc(ProfilerObject *op)
 {
+    PyObject_GC_UnTrack(op);
     if (op->flags & POF_ENABLED) {
-        PyThreadState *tstate = PyThreadState_GET();
+        PyThreadState *tstate = _PyThreadState_GET();
         if (_PyEval_SetProfile(tstate, NULL, NULL) < 0) {
-            PyErr_WriteUnraisable((PyObject *)op);
+            _PyErr_WriteUnraisableMsg("When destroying _lsprof profiler", NULL);
         }
     }
 
     flush_unmatched(op);
     clearEntries(op);
     Py_XDECREF(op->externalTimer);
-    Py_TYPE(op)->tp_free(op);
+    PyTypeObject *tp = Py_TYPE(op);
+    tp->tp_free(op);
+    Py_DECREF(tp);
 }
 
 static int
@@ -748,7 +769,7 @@ profiler_init(ProfilerObject *pObj, PyObject *args, PyObject *kw)
     static char *kwlist[] = {"timer", "timeunit",
                                    "subcalls", "builtins", 0};
 
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "|Odii:Profiler", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|Odpp:Profiler", kwlist,
                                      &timer, &timeunit,
                                      &subcalls, &builtins))
         return -1;
@@ -756,14 +777,13 @@ profiler_init(ProfilerObject *pObj, PyObject *args, PyObject *kw)
     if (setSubcalls(pObj, subcalls) < 0 || setBuiltins(pObj, builtins) < 0)
         return -1;
     pObj->externalTimerUnit = timeunit;
-    Py_XINCREF(timer);
-    Py_XSETREF(pObj->externalTimer, timer);
+    Py_XSETREF(pObj->externalTimer, Py_XNewRef(timer));
     return 0;
 }
 
 static PyMethodDef profiler_methods[] = {
     _LSPROF_PROFILER_GETSTATS_METHODDEF
-    {"enable",          (PyCFunction)(void(*)(void))profiler_enable,
+    {"enable",          _PyCFunction_CAST(profiler_enable),
                     METH_VARARGS | METH_KEYWORDS,       enable_doc},
     {"disable",         (PyCFunction)profiler_disable,
                     METH_NOARGS,                        disable_doc},
@@ -782,91 +802,106 @@ Profiler(timer=None, timeunit=None, subcalls=True, builtins=True)\n\
     is, in seconds).\n\
 ");
 
-static PyTypeObject PyProfiler_Type = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    "_lsprof.Profiler",                     /* tp_name */
-    sizeof(ProfilerObject),                 /* tp_basicsize */
-    0,                                      /* tp_itemsize */
-    (destructor)profiler_dealloc,           /* tp_dealloc */
-    0,                                      /* tp_vectorcall_offset */
-    0,                                      /* tp_getattr */
-    0,                                      /* tp_setattr */
-    0,                                      /* tp_as_async */
-    0,                                      /* tp_repr */
-    0,                                      /* tp_as_number */
-    0,                                      /* tp_as_sequence */
-    0,                                      /* tp_as_mapping */
-    0,                                      /* tp_hash */
-    0,                                      /* tp_call */
-    0,                                      /* tp_str */
-    0,                                      /* tp_getattro */
-    0,                                      /* tp_setattro */
-    0,                                      /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    profiler_doc,                           /* tp_doc */
-    0,                                      /* tp_traverse */
-    0,                                      /* tp_clear */
-    0,                                      /* tp_richcompare */
-    0,                                      /* tp_weaklistoffset */
-    0,                                      /* tp_iter */
-    0,                                      /* tp_iternext */
-    profiler_methods,                       /* tp_methods */
-    0,                                      /* tp_members */
-    0,                                      /* tp_getset */
-    0,                                      /* tp_base */
-    0,                                      /* tp_dict */
-    0,                                      /* tp_descr_get */
-    0,                                      /* tp_descr_set */
-    0,                                      /* tp_dictoffset */
-    (initproc)profiler_init,                /* tp_init */
-    PyType_GenericAlloc,                    /* tp_alloc */
-    PyType_GenericNew,                      /* tp_new */
-    PyObject_Del,                           /* tp_free */
+static PyType_Slot _lsprof_profiler_type_spec_slots[] = {
+    {Py_tp_doc, (void *)profiler_doc},
+    {Py_tp_methods, profiler_methods},
+    {Py_tp_dealloc, profiler_dealloc},
+    {Py_tp_init, profiler_init},
+    {Py_tp_traverse, profiler_traverse},
+    {0, 0}
+};
+
+static PyType_Spec _lsprof_profiler_type_spec = {
+    .name = "_lsprof.Profiler",
+    .basicsize = sizeof(ProfilerObject),
+    .flags = (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE |
+              Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE),
+    .slots = _lsprof_profiler_type_spec_slots,
 };
 
 static PyMethodDef moduleMethods[] = {
     {NULL, NULL}
 };
 
+static int
+_lsprof_traverse(PyObject *module, visitproc visit, void *arg)
+{
+    _lsprof_state *state = _lsprof_get_state(module);
+    Py_VISIT(state->profiler_type);
+    Py_VISIT(state->stats_entry_type);
+    Py_VISIT(state->stats_subentry_type);
+    return 0;
+}
+
+static int
+_lsprof_clear(PyObject *module)
+{
+    _lsprof_state *state = _lsprof_get_state(module);
+    Py_CLEAR(state->profiler_type);
+    Py_CLEAR(state->stats_entry_type);
+    Py_CLEAR(state->stats_subentry_type);
+    return 0;
+}
+
+static void
+_lsprof_free(void *module)
+{
+    _lsprof_clear((PyObject *)module);
+}
+
+static int
+_lsprof_exec(PyObject *module)
+{
+    _lsprof_state *state = PyModule_GetState(module);
+
+    state->profiler_type = (PyTypeObject *)PyType_FromModuleAndSpec(
+        module, &_lsprof_profiler_type_spec, NULL);
+    if (state->profiler_type == NULL) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, state->profiler_type) < 0) {
+        return -1;
+    }
+
+    state->stats_entry_type = PyStructSequence_NewType(&profiler_entry_desc);
+    if (state->stats_entry_type == NULL) {
+        return -1;
+    }
+    if (PyModule_AddType(module, state->stats_entry_type) < 0) {
+        return -1;
+    }
+
+    state->stats_subentry_type = PyStructSequence_NewType(&profiler_subentry_desc);
+    if (state->stats_subentry_type == NULL) {
+        return -1;
+    }
+    if (PyModule_AddType(module, state->stats_subentry_type) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static PyModuleDef_Slot _lsprofslots[] = {
+    {Py_mod_exec, _lsprof_exec},
+    {0, NULL}
+};
 
 static struct PyModuleDef _lsprofmodule = {
     PyModuleDef_HEAD_INIT,
-    "_lsprof",
-    "Fast profiler",
-    -1,
-    moduleMethods,
-    NULL,
-    NULL,
-    NULL,
-    NULL
+    .m_name = "_lsprof",
+    .m_doc = "Fast profiler",
+    .m_size = sizeof(_lsprof_state),
+    .m_methods = moduleMethods,
+    .m_slots = _lsprofslots,
+    .m_traverse = _lsprof_traverse,
+    .m_clear = _lsprof_clear,
+    .m_free = _lsprof_free
 };
 
 PyMODINIT_FUNC
 PyInit__lsprof(void)
 {
-    PyObject *module, *d;
-    module = PyModule_Create(&_lsprofmodule);
-    if (module == NULL)
-        return NULL;
-    d = PyModule_GetDict(module);
-    if (PyType_Ready(&PyProfiler_Type) < 0)
-        return NULL;
-    PyDict_SetItemString(d, "Profiler", (PyObject *)&PyProfiler_Type);
-
-    if (!initialized) {
-        if (PyStructSequence_InitType2(&StatsEntryType,
-                                       &profiler_entry_desc) < 0)
-            return NULL;
-        if (PyStructSequence_InitType2(&StatsSubEntryType,
-                                       &profiler_subentry_desc) < 0)
-            return NULL;
-    }
-    Py_INCREF((PyObject*) &StatsEntryType);
-    Py_INCREF((PyObject*) &StatsSubEntryType);
-    PyModule_AddObject(module, "profiler_entry",
-                       (PyObject*) &StatsEntryType);
-    PyModule_AddObject(module, "profiler_subentry",
-                       (PyObject*) &StatsSubEntryType);
-    initialized = 1;
-    return module;
+    return PyModuleDef_Init(&_lsprofmodule);
 }
