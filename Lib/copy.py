@@ -178,21 +178,16 @@ def _deepcopy_list(x, memo, deepcopy=deepcopy):
     return y
 d[list] = _deepcopy_list
 
-def _deepcopy_tuple(x, memo, deepcopy=deepcopy):
+def _deepcopy_tuple(x, memo):
     y = [deepcopy(a, memo) for a in x]
     # We're not going to put the tuple in the memo, but it's still important we
     # check for it, in case the tuple contains recursive mutable structures.
-    try:
+    if id(x) in memo:
         return memo[id(x)]
-    except KeyError:
-        pass
     for k, j in zip(x, y):
         if k is not j:
-            y = tuple(y)
-            break
-    else:
-        y = x
-    return y
+            return tuple(y)
+    return x
 d[tuple] = _deepcopy_tuple
 
 def _deepcopy_dict(x, memo, deepcopy=deepcopy):
